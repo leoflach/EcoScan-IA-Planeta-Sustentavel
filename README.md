@@ -1,2 +1,2 @@
-# EcoScan-IA-Planeta-Sustentavel
-🌱EcoScan IA Planeta Sustentavel: Um Assistente de Reciclagem e Compostagem com IA  
+# EcoScan-IA-Planeta-Sustentável
+🌱EcoScan IA Planeta Sustentável: Um Assistente de Reciclagem e Compostagem com IA  
