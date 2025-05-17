@@ -1,0 +1,874 @@
+# EcoScan: Notebook do Google Colab
+
+Este arquivo simula o notebook do Google Colab que seria criado para o projeto EcoScan. Em um ambiente real, este conteúdo seria copiado para um notebook no Google Colab.
+
+```python
+# @title # 🌱 EcoScan: Assistente de Reciclagem e Compostagem com IA
+
+"""
+EcoScan: Assistente de Reciclagem e Compostagem com IA
+Desenvolvido como parte do projeto de IA com Google Gemini
+
+Este notebook implementa um assistente inteligente que utiliza a API do Gemini
+para identificar resíduos através de imagens e fornecer orientações personalizadas
+sobre como reciclá-los ou compostá-los corretamente.
+"""
+
+# Instalação das bibliotecas necessárias
+!pip install google-generativeai pillow matplotlib folium pandas ipywidgets
+
+# Importação das bibliotecas
+import os
+import io
+import base64
+import requests
+import json
+import google.generativeai as genai
+from PIL import Image
+import matplotlib.pyplot as plt
+import pandas as pd
+import folium
+from IPython.display import display, HTML, Image as IPImage
+from google.colab import files
+import numpy as np
+import ipywidgets as widgets
+from google.colab import output
+
+# @title ## Configuração da API Gemini
+# @markdown Insira sua chave de API do Google AI Studio
+
+# Widget para inserção da chave API
+api_key = "" # @param {type:"string"}
+
+# Configuração da API Gemini
+genai.configure(api_key=api_key)
+
+# Verificação da configuração
+try:
+    # Teste simples para verificar se a API está funcionando
+    model = genai.GenerativeModel('gemini-pro')
+    response = model.generate_content("Olá, você pode me ajudar com reciclagem?")
+    print("✅ API Gemini configurada com sucesso!")
+    print(f"Resposta de teste: {response.text[:100]}...")
+except Exception as e:
+    print("❌ Erro na configuração da API Gemini:")
+    print(e)
+    print("\nPor favor, verifique sua chave de API e tente novamente.")
+    print("Você pode obter uma chave em: https://aistudio.google.com/")
+
+# @title ## Upload e Processamento de Imagens
+
+def upload_and_process_image():
+    """
+    Permite ao usuário fazer upload de uma imagem e a processa para análise.
+    
+    Returns:
+        tuple: Imagem processada e imagem original
+    """
+    print("📤 Faça upload de uma imagem do resíduo que deseja analisar...")
+    uploaded = files.upload()
+    
+    if not uploaded:
+        print("❌ Nenhuma imagem foi enviada.")
+        return None, None
+    
+    # Obtém o nome do primeiro arquivo enviado
+    file_name = list(uploaded.keys())[0]
+    
+    try:
+        # Abre a imagem com PIL
+        image = Image.open(io.BytesIO(uploaded[file_name]))
+        
+        # Redimensiona a imagem se for muito grande (mantendo a proporção)
+        max_size = 1024
+        if max(image.size) > max_size:
+            ratio = max_size / max(image.size)
+            new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+            image = image.resize(new_size, Image.LANCZOS)
+        
+        # Cria uma cópia da imagem original para exibição
+        display_image = image.copy()
+        
+        # Exibe a imagem
+        plt.figure(figsize=(8, 8))
+        plt.imshow(np.array(display_image))
+        plt.axis('off')
+        plt.title(f"Imagem enviada: {file_name}")
+        plt.show()
+        
+        print(f"✅ Imagem '{file_name}' processada com sucesso!")
+        return image, display_image
+    
+    except Exception as e:
+        print(f"❌ Erro ao processar a imagem: {e}")
+        return None, None
+
+# @title ## Análise de Imagem com Gemini
+
+def analyze_waste_image(image):
+    """
+    Analisa uma imagem de resíduo usando o modelo Gemini-Pro-Vision.
+    
+    Args:
+        image: Imagem PIL a ser analisada
+    
+    Returns:
+        dict: Resultado da análise contendo tipo de material, instruções e alternativas
+    """
+    if image is None:
+        print("❌ Nenhuma imagem válida para análise.")
+        return None
+    
+    try:
+        # Configura o modelo multimodal Gemini-Pro-Vision
+        model = genai.GenerativeModel('gemini-pro-vision')
+        
+        # Prompt detalhado para orientar a análise do modelo
+        prompt = """
+        Analise esta imagem de um resíduo e forneça as seguintes informações:
+        
+        1. IDENTIFICAÇÃO: Que tipo de material/resíduo é este? Seja específico.
+        2. CLASSIFICAÇÃO: Este item é reciclável, compostável, lixo comum ou resíduo especial?
+        3. INSTRUÇÕES DE DESCARTE: Como este item deve ser descartado corretamente? Inclua etapas de preparação (limpeza, desmontagem, etc.) se necessário.
+        4. IMPACTO AMBIENTAL: Qual o impacto ambiental deste tipo de resíduo quando descartado incorretamente?
+        5. ALTERNATIVAS SUSTENTÁVEIS: Existem alternativas mais sustentáveis para este item? Sugira pelo menos 2 opções.
+        
+        Formate sua resposta em JSON com as seguintes chaves: 
+        "material", "classificacao", "instrucoes_descarte", "impacto_ambiental", "alternativas_sustentaveis"
+        """
+        
+        # Gera a resposta do modelo
+        response = model.generate_content([prompt, image])
+        
+        # Extrai o texto da resposta
+        response_text = response.text
+        
+        # Tenta extrair o JSON da resposta
+        try:
+            # Encontra o início e fim do JSON na resposta
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+            
+            if json_start >= 0 and json_end > json_start:
+                json_str = response_text[json_start:json_end]
+                result = json.loads(json_str)
+                print("✅ Análise concluída com sucesso!")
+                return result
+            else:
+                # Se não encontrar JSON, tenta estruturar a resposta manualmente
+                print("⚠️ Formato JSON não detectado na resposta. Processando texto...")
+                
+                # Estrutura básica para resultado
+                result = {
+                    "material": "Não identificado",
+                    "classificacao": "Não identificado",
+                    "instrucoes_descarte": "Não disponível",
+                    "impacto_ambiental": "Não disponível",
+                    "alternativas_sustentaveis": []
+                }
+                
+                # Extrai informações do texto da resposta
+                if "IDENTIFICAÇÃO" in response_text:
+                    material_section = response_text.split("IDENTIFICAÇÃO:")[1].split("\n")[0].strip()
+                    result["material"] = material_section
+                
+                if "CLASSIFICAÇÃO" in response_text:
+                    class_section = response_text.split("CLASSIFICAÇÃO:")[1].split("\n")[0].strip()
+                    result["classificacao"] = class_section
+                
+                if "INSTRUÇÕES DE DESCARTE" in response_text:
+                    instr_section = response_text.split("INSTRUÇÕES DE DESCARTE:")[1].split("IMPACTO AMBIENTAL")[0].strip()
+                    result["instrucoes_descarte"] = instr_section
+                
+                if "IMPACTO AMBIENTAL" in response_text:
+                    impact_section = response_text.split("IMPACTO AMBIENTAL:")[1].split("ALTERNATIVAS SUSTENTÁVEIS")[0].strip()
+                    result["impacto_ambiental"] = impact_section
+                
+                if "ALTERNATIVAS SUSTENTÁVEIS" in response_text:
+                    alt_section = response_text.split("ALTERNATIVAS SUSTENTÁVEIS:")[1].strip()
+                    result["alternativas_sustentaveis"] = [alt.strip() for alt in alt_section.split("-") if alt.strip()]
+                
+                print("✅ Análise processada a partir do texto!")
+                return result
+        
+        except Exception as e:
+            print(f"⚠️ Erro ao processar JSON: {e}")
+            print("Retornando resposta em texto bruto...")
+            return {"resposta_completa": response_text}
+    
+    except Exception as e:
+        print(f"❌ Erro na análise da imagem: {e}")
+        return None
+
+# @title ## Base de Conhecimento: Pontos de Coleta
+
+def get_collection_points(material_type, user_location=None):
+    """
+    Retorna pontos de coleta adequados para o tipo de material.
+    
+    Args:
+        material_type (str): Tipo de material/classificação
+        user_location (tuple, optional): Localização do usuário (latitude, longitude)
+    
+    Returns:
+        list: Lista de pontos de coleta
+    """
+    # Base de conhecimento simulada - em uma aplicação real, isso seria uma API ou banco de dados
+    collection_points = {
+        "reciclável": [
+            {"nome": "Cooperativa ReciclaVida", "tipo": "Cooperativa de reciclagem", 
+             "materiais": ["papel", "plástico", "metal", "vidro"], 
+             "endereco": "Av. Sustentável, 123", "lat": -23.550520, "lng": -46.633308},
+            {"nome": "Ecoponto Municipal", "tipo": "Ponto de entrega voluntária", 
+             "materiais": ["papel", "plástico", "metal", "vidro", "óleo de cozinha"], 
+             "endereco": "Rua Ecológica, 456", "lat": -23.557920, "lng": -46.639825},
+            {"nome": "Supermercado Verde", "tipo": "Ponto de entrega em supermercado", 
+             "materiais": ["plástico", "papel", "metal"], 
+             "endereco": "Av. das Árvores, 789", "lat": -23.543430, "lng": -46.642230}
+        ],
+        "compostável": [
+            {"nome": "Horta Comunitária Central", "tipo": "Composteira comunitária", 
+             "materiais": ["restos de alimentos", "folhas", "borra de café"], 
+             "endereco": "Praça das Flores, s/n", "lat": -23.553240, "lng": -46.636550},
+            {"nome": "Projeto Composta SP", "tipo": "Composteira municipal", 
+             "materiais": ["resíduos orgânicos", "podas de jardim"], 
+             "endereco": "Rua das Sementes, 321", "lat": -23.561320, "lng": -46.631240}
+        ],
+        "especial": [
+            {"nome": "Centro de Reciclagem Tecnológica", "tipo": "Descarte de eletrônicos", 
+             "materiais": ["eletrônicos", "pilhas", "baterias", "lâmpadas"], 
+             "endereco": "Av. da Tecnologia, 987", "lat": -23.548720, "lng": -46.638120},
+            {"nome": "Farmácia EcoSaúde", "tipo": "Descarte de medicamentos", 
+             "materiais": ["medicamentos vencidos"], 
+             "endereco": "Rua da Saúde, 654", "lat": -23.559840, "lng": -46.634670}
+        ]
+    }
+    
+    # Determina a categoria apropriada com base no tipo de material
+    category = "reciclável"  # categoria padrão
+    
+    material_lower = material_type.lower()
+    if any(term in material_lower for term in ["orgânico", "compostável", "compost", "alimento"]):
+        category = "compostável"
+    elif any(term in material_lower for term in ["especial", "eletrônico", "tóxico", "perigoso", "pilha", "bateria", "lâmpada", "medicamento"]):
+        category = "especial"
+    
+    # Retorna os pontos de coleta para a categoria identificada
+    points = collection_points.get(category, collection_points["reciclável"])
+    
+    # Adiciona distância simulada se a localização do usuário for fornecida
+    if user_location:
+        for point in points:
+            # Cálculo simplificado de distância (em uma aplicação real, usaria a API do Google Maps)
+            lat_diff = abs(user_location[0] - point["lat"])
+            lng_diff = abs(user_location[1] - point["lng"])
+            point["distancia"] = round(111.11 * (lat_diff**2 + lng_diff**2)**0.5, 2)  # km aproximados
+    
+    return points
+
+# @title ## Cálculo de Impacto Ambiental
+
+def calculate_environmental_impact(material, weight=0.1):
+    """
+    Calcula o impacto ambiental positivo do descarte correto.
+    
+    Args:
+        material (str): Tipo de material
+        weight (float): Peso estimado em kg (padrão: 0.1kg)
+    
+    Returns:
+        dict: Métricas de impacto ambiental
+    """
+    # Base de conhecimento com fatores de impacto por kg de material
+    impact_factors = {
+        "plástico": {
+            "co2_evitado": 6.0,  # kg de CO2 evitado por kg de plástico reciclado
+            "agua_economizada": 100.0,  # litros de água economizados
+            "energia_economizada": 5.0,  # kWh de energia economizada
+            "espaco_aterro": 0.05  # m³ de espaço em aterro economizado
+        },
+        "papel": {
+            "co2_evitado": 3.5,
+            "agua_economizada": 50.0,
+            "energia_economizada": 4.0,
+            "espaco_aterro": 0.03
+        },
+        "vidro": {
+            "co2_evitado": 0.3,
+            "agua_economizada": 15.0,
+            "energia_economizada": 0.3,
+            "espaco_aterro": 0.02
+        },
+        "metal": {
+            "co2_evitado": 9.0,
+            "agua_economizada": 40.0,
+            "energia_economizada": 14.0,
+            "espaco_aterro": 0.04
+        },
+        "orgânico": {
+            "co2_evitado": 0.5,
+            "agua_economizada": 5.0,
+            "energia_economizada": 0.1,
+            "espaco_aterro": 0.01,
+            "adubo_gerado": 0.3  # kg de adubo gerado por kg de resíduo orgânico
+        },
+        "eletrônico": {
+            "co2_evitado": 20.0,
+            "agua_economizada": 200.0,
+            "energia_economizada": 25.0,
+            "espaco_aterro": 0.02,
+            "metais_recuperados": 0.1  # kg de metais recuperados
+        }
+    }
+    
+    # Identifica a categoria do material
+    material_lower = material.lower()
+    category = "plástico"  # categoria padrão
+    
+    if any(term in material_lower for term in ["papel", "papelão", "jornal", "revista"]):
+        category = "papel"
+    elif any(term in material_lower for term in ["vidro", "garrafa"]):
+        category = "vidro"
+    elif any(term in material_lower for term in ["metal", "alumínio", "lata", "aço"]):
+        category = "metal"
+    elif any(term in material_lower for term in ["orgânico", "comida", "alimento", "resto"]):
+        category = "orgânico"
+    elif any(term in material_lower for term in ["eletrônico", "bateria", "pilha", "computador", "celular"]):
+        category = "eletrônico"
+    
+    # Obtém os fatores de impacto para a categoria
+    factors = impact_factors.get(category, impact_factors["plástico"])
+    
+    # Calcula o impacto com base no peso
+    impact = {}
+    for key, value in factors.items():
+        impact[key] = round(value * weight, 3)
+    
+    # Adiciona equivalências para facilitar a compreensão
+    equivalents = {}
+    
+    if "co2_evitado" in impact:
+        # Equivalência de CO2: km não dirigidos de carro (0.2 kg CO2/km)
+        equivalents["km_carro_evitados"] = round(impact["co2_evitado"] / 0.2, 1)
+    
+    if "agua_economizada" in impact:
+        # Equivalência de água: garrafas de 500ml
+        equivalents["garrafas_agua"] = round(impact["agua_economizada"] / 0.5, 1)
+    
+    if "energia_economizada" in impact:
+        # Equivalência de energia: horas de TV (0.1 kWh/hora)
+        equivalents["horas_tv"] = round(impact["energia_economizada"] / 0.1, 1)
+    
+    return {
+        "impacto": impact,
+        "equivalencias": equivalents,
+        "categoria": category
+    }
+
+# @title ## Visualização dos Resultados
+
+def display_results(analysis_result, impact_data, collection_points):
+    """
+    Exibe os resultados da análise de forma visual e informativa.
+    
+    Args:
+        analysis_result (dict): Resultado da análise da imagem
+        impact_data (dict): Dados de impacto ambiental
+        collection_points (list): Lista de pontos de coleta
+    """
+    if not analysis_result:
+        print("❌ Sem resultados para exibir.")
+        return
+    
+    # Estilo CSS para melhorar a apresentação
+    display(HTML("""
+    <style>
+        .result-container {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            border-radius: 10px;
+            background-color: #f5f9f5;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .section-title {
+            color: #2e7d32;
+            margin-top: 0;
+            border-bottom: 2px solid #a5d6a7;
+            padding-bottom: 8px;
+        }
+        .material-info {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .material-badge {
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-left: 10px;
+            font-size: 14px;
+            color: white;
+        }
+        .recyclable {
+            background-color: #4caf50;
+        }
+        .compostable {
+            background-color: #8bc34a;
+        }
+        .special {
+            background-color: #ff9800;
+        }
+        .non-recyclable {
+            background-color: #f44336;
+        }
+        .impact-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .impact-item {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            background-color: #e8f5e9;
+        }
+        .impact-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2e7d32;
+            margin: 5px 0;
+        }
+        .impact-label {
+            font-size: 14px;
+            color: #555;
+        }
+        .collection-point {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-left: 4px solid #4caf50;
+            background-color: #f1f8e9;
+        }
+        .collection-name {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .collection-address {
+            font-size: 14px;
+            color: #555;
+        }
+        .collection-type {
+            display: inline-block;
+            font-size: 12px;
+            padding: 3px 8px;
+            border-radius: 12px;
+            background-color: #c8e6c9;
+            margin-top: 5px;
+        }
+        .alternatives-list {
+            list-style-type: none;
+            padding-left: 0;
+        }
+        .alternatives-list li {
+            margin-bottom: 10px;
+            padding-left: 25px;
+            position: relative;
+        }
+        .alternatives-list li:before {
+            content: '🌱';
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+    </style>
+    """))
+    
+    # Determina a classe CSS com base na classificação
+    classification = analysis_result.get("classificacao", "").lower()
+    if "reciclável" in classification:
+        badge_class = "recyclable"
+        badge_text = "Reciclável"
+    elif "compostável" in classification or "orgânico" in classification:
+        badge_class = "compostable"
+        badge_text = "Compostável"
+    elif "especial" in classification:
+        badge_class = "special"
+        badge_text = "Descarte Especial"
+    else:
+        badge_class = "non-recyclable"
+        badge_text = "Não Reciclável"
+    
+    # Constrói o HTML para exibição dos resultados
+    html_content = f"""
+    <div class="result-container">
+        <h2 style="text-align: center; color: #2e7d32;">🌱 EcoScan: Resultado da Análise</h2>
+        
+        <div class="section">
+            <h3 class="section-title">Identificação do Material</h3>
+            <div class="material-info">
+                <p><strong>Material:</strong> {analysis_result.get("material", "Não identificado")}</p>
+                <span class="material-badge {badge_class}">{badge_text}</span>
+            </div>
+            <p><strong>Instruções de Descarte:</strong> {analysis_result.get("instrucoes_descarte", "Não disponível")}</p>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Impacto Ambiental</h3>
+            <p>{analysis_result.get("impacto_ambiental", "Informação não disponível")}</p>
+            
+            <h4>Benefícios do Descarte Correto:</h4>
+            <div class="impact-grid">
+    """
+    
+    # Adiciona itens de impacto ambiental
+    if impact_data and "impacto" in impact_data:
+        for key, value in impact_data["impacto"].items():
+            label = key.replace("_", " ").title()
+            unit = ""
+            if "co2" in key:
+                unit = "kg CO₂"
+            elif "agua" in key:
+                unit = "litros"
+            elif "energia" in key:
+                unit = "kWh"
+            elif "espaco" in key:
+                unit = "m³"
+            elif "adubo" in key:
+                unit = "kg"
+            
+            html_content += f"""
+                <div class="impact-item">
+                    <div class="impact-value">{value} {unit}</div>
+                    <div class="impact-label">{label}</div>
+                </div>
+            """
+        
+        # Adiciona equivalências
+        if "equivalencias" in impact_data:
+            for key, value in impact_data["equivalencias"].items():
+                label = ""
+                if key == "km_carro_evitados":
+                    label = "Km de Carro Evitados"
+                elif key == "garrafas_agua":
+                    label = "Garrafas de Água (500ml)"
+                elif key == "horas_tv":
+                    label = "Horas de TV"
+                
+                html_content += f"""
+                    <div class="impact-item">
+                        <div class="impact-value">{value}</div>
+                        <div class="impact-label">{label}</div>
+                    </div>
+                """
+    
+    html_content += """
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Alternativas Sustentáveis</h3>
+            <ul class="alternatives-list">
+    """
+    
+    # Adiciona alternativas sustentáveis
+    alternatives = analysis_result.get("alternativas_sustentaveis", [])
+    if isinstance(alternatives, list):
+        for alt in alternatives:
+            html_content += f"<li>{alt}</li>"
+    else:
+        html_content += f"<li>{alternatives}</li>"
+    
+    html_content += """
+            </ul>
+        </div>
+        
+        <div class="section">
+            <h3 class="section-title">Onde Descartar</h3>
+    """
+    
+    # Adiciona pontos de coleta
+    if collection_points:
+        for point in collection_points[:3]:  # Limita a 3 pontos para não sobrecarregar
+            distance_info = f" ({point['distancia']} km)" if 'distancia' in point else ""
+            html_content += f"""
+                <div class="collection-point">
+                    <div class="collection-name">{point['nome']}{distance_info}</div>
+                    <div class="collection-address">{point['endereco']}</div>
+                    <div class="collection-type">{point['tipo']}</div>
+                </div>
+            """
+    else:
+        html_content += "<p>Nenhum ponto de coleta encontrado para este material.</p>"
+    
+    html_content += """
+        </div>
+    </div>
+    """
+    
+    # Exibe o HTML
+    display(HTML(html_content))
+    
+    # Cria um mapa com os pontos de coleta
+    if collection_points:
+        print("\n📍 Mapa de Pontos de Coleta:")
+        
+        # Calcula o centro do mapa
+        avg_lat = sum(point['lat'] for point in collection_points) / len(collection_points)
+        avg_lng = sum(point['lng'] for point in collection_points) / len(collection_points)
+        
+        # Cria o mapa
+        m = folium.Map(location=[avg_lat, avg_lng], zoom_start=13)
+        
+        # Adiciona marcadores para cada ponto
+        for point in collection_points:
+            popup_text = f"""
+                <strong>{point['nome']}</strong><br>
+                {point['endereco']}<br>
+                <em>{point['tipo']}</em>
+            """
+            folium.Marker(
+                location=[point['lat'], point['lng']],
+                popup=popup_text,
+                icon=folium.Icon(color='green', icon='recycle', prefix='fa')
+            ).add_to(m)
+        
+        # Exibe o mapa
+        display(m)
+
+# @title ## Função Principal do EcoScan
+
+def run_ecoscan():
+    """
+    Função principal que executa o fluxo completo do EcoScan.
+    """
+    print("🌱 Bem-vindo ao EcoScan: Assistente de Reciclagem e Compostagem com IA!")
+    print("=" * 70)
+    print("Este assistente irá ajudá-lo a identificar como descartar corretamente seus resíduos.")
+    print("Faça upload de uma imagem do item que deseja descartar para começar.")
+    print("=" * 70)
+    
+    # Etapa 1: Upload e processamento da imagem
+    image, display_image = upload_and_process_image()
+    if image is None:
+        return
+    
+    # Etapa 2: Análise da imagem com Gemini
+    print("\n🔍 Analisando a imagem com IA...")
+    analysis_result = analyze_waste_image(image)
+    if analysis_result is None:
+        return
+    
+    # Etapa 3: Obtenção de informações adicionais
+    material = analysis_result.get("material", "")
+    classification = analysis_result.get("classificacao", "")
+    
+    # Etapa 4: Cálculo do impacto ambiental
+    print("\n📊 Calculando o impacto ambiental positivo...")
+    # Solicita o peso estimado (opcional)
+    try:
+        weight_input = input("Digite o peso estimado do item em kg (ou pressione Enter para usar 0.1kg): ")
+        weight = float(weight_input) if weight_input.strip() else 0.1
+    except ValueError:
+        print("⚠️ Valor inválido, usando peso padrão de 0.1kg.")
+        weight = 0.1
+    
+    impact_data = calculate_environmental_impact(material, weight)
+    
+    # Etapa 5: Busca de pontos de coleta
+    print("\n🗺️ Buscando pontos de coleta próximos...")
+    # Localização padrão (São Paulo)
+    default_location = (-23.550520, -46.633308)
+    collection_points = get_collection_points(classification, default_location)
+    
+    # Etapa 6: Exibição dos resultados
+    print("\n✅ Análise concluída! Exibindo resultados...")
+    display_results(analysis_result, impact_data, collection_points)
+    
+    print("\n🌱 Obrigado por usar o EcoScan! Juntos podemos fazer a diferença para o meio ambiente.")
+
+# @title ## Interface Interativa do EcoScan
+
+def create_interactive_interface():
+    """
+    Cria uma interface interativa para o EcoScan usando widgets.
+    """
+    # Limpa a saída
+    output.clear()
+    
+    # Exibe o cabeçalho
+    display(HTML("""
+    <div style="text-align:center; padding: 20px; background-color: #e8f5e9; border-radius: 10px; margin-bottom: 20px;">
+        <h1 style="color: #2e7d32;">🌱 EcoScan</h1>
+        <h3 style="color: #388e3c;">Assistente de Reciclagem e Compostagem com IA</h3>
+        <p style="color: #555;">Descubra como descartar corretamente seus resíduos e contribua para um planeta mais sustentável.</p>
+    </div>
+    """))
+    
+    # Cria abas para diferentes funcionalidades
+    tab = widgets.Tab()
+    tab_analyze = widgets.VBox()
+    tab_about = widgets.VBox()
+    tab_help = widgets.VBox()
+    
+    tab.children = [tab_analyze, tab_about, tab_help]
+    tab.set_title(0, 'Analisar Resíduo')
+    tab.set_title(1, 'Sobre o Projeto')
+    tab.set_title(2, 'Ajuda')
+    
+    # Conteúdo da aba "Analisar Resíduo"
+    start_button = widgets.Button(
+        description='Iniciar Análise',
+        button_style='success',
+        icon='camera'
+    )
+    
+    output_area = widgets.Output()
+    
+    def on_start_button_clicked(b):
+        with output_area:
+            output.clear()
+            run_ecoscan()
+    
+    start_button.on_click(on_start_button_clicked)
+    
+    tab_analyze.children = [
+        widgets.HTML(
+            value="""
+            <div style="padding: 15px; background-color: #f1f8e9; border-radius: 8px; margin-bottom: 15px;">
+                <h3 style="margin-top: 0;">Como funciona:</h3>
+                <ol>
+                    <li>Clique em "Iniciar Análise"</li>
+                    <li>Faça upload de uma foto do resíduo que deseja analisar</li>
+                    <li>Informe o peso estimado (opcional)</li>
+                    <li>Receba instruções detalhadas sobre como descartar corretamente</li>
+                </ol>
+            </div>
+            """
+        ),
+        start_button,
+        output_area
+    ]
+    
+    # Conteúdo da aba "Sobre o Projeto"
+    tab_about.children = [
+        widgets.HTML(
+            value="""
+            <div style="padding: 20px; background-color: #f5f5f5; border-radius: 8px;">
+                <h3>Sobre o EcoScan</h3>
+                <p>O EcoScan é um assistente inteligente que utiliza a API do Gemini para ajudar as pessoas a descartarem corretamente seus resíduos, promovendo práticas sustentáveis de reciclagem e compostagem.</p>
+                
+                <h4>O Problema</h4>
+                <p>O gerenciamento inadequado de resíduos é um dos maiores desafios ambientais da atualidade. No Brasil, cada pessoa produz em média 1,04 kg de lixo por dia, mas apenas 3% dos resíduos são efetivamente reciclados.</p>
+                
+                <h4>Nossa Solução</h4>
+                <p>O EcoScan utiliza inteligência artificial para:</p>
+                <ul>
+                    <li>Identificar visualmente diferentes tipos de resíduos</li>
+                    <li>Fornecer instruções personalizadas para descarte correto</li>
+                    <li>Conectar usuários a pontos de coleta próximos</li>
+                    <li>Calcular o impacto ambiental positivo de cada ação</li>
+                    <li>Sugerir alternativas mais sustentáveis</li>
+                </ul>
+                
+                <h4>Tecnologias Utilizadas</h4>
+                <ul>
+                    <li>Google Gemini API para análise de imagens e geração de conteúdo</li>
+                    <li>Python para processamento de dados e lógica de negócio</li>
+                    <li>Google Colab para hospedagem e execução do projeto</li>
+                </ul>
+                
+                <h4>Impacto Esperado</h4>
+                <p>Ao facilitar o descarte correto de resíduos, o EcoScan contribui para:</p>
+                <ul>
+                    <li>Redução da contaminação de materiais recicláveis</li>
+                    <li>Aumento das taxas de reciclagem e compostagem</li>
+                    <li>Diminuição do volume de resíduos em aterros sanitários</li>
+                    <li>Educação ambiental e conscientização</li>
+                </ul>
+            </div>
+            """
+        )
+    ]
+    
+    # Conteúdo da aba "Ajuda"
+    tab_help.children = [
+        widgets.HTML(
+            value="""
+            <div style="padding: 20px; background-color: #f5f5f5; border-radius: 8px;">
+                <h3>Perguntas Frequentes</h3>
+                
+                <h4>Como obter uma API Key do Gemini?</h4>
+                <p>Para utilizar o EcoScan, você precisa de uma chave de API do Google AI Studio:</p>
+                <ol>
+                    <li>Acesse <a href="https://aistudio.google.com/" target="_blank">https://aistudio.google.com/</a></li>
+                    <li>Faça login com sua conta Google</li>
+                    <li>No menu lateral, clique em "Get API key"</li>
+                    <li>Crie uma nova chave ou use uma existente</li>
+                    <li>Copie a chave e cole no campo solicitado no EcoScan</li>
+                </ol>
+                
+                <h4>Quais tipos de resíduos o EcoScan pode identificar?</h4>
+                <p>O EcoScan pode identificar uma ampla variedade de resíduos, incluindo:</p>
+                <ul>
+                    <li>Plásticos (diferentes tipos)</li>
+                    <li>Papel e papelão</li>
+                    <li>Vidro</li>
+                    <li>Metais</li>
+                    <li>Resíduos orgânicos</li>
+                    <li>Eletrônicos</li>
+                    <li>Embalagens compostas</li>
+                    <li>Resíduos especiais (pilhas, baterias, etc.)</li>
+                </ul>
+                
+                <h4>As informações sobre pontos de coleta são reais?</h4>
+                <p>Na versão atual do protótipo, os pontos de coleta são simulados para demonstração. Em uma versão completa, seria integrado com APIs de geolocalização e bases de dados reais de pontos de coleta.</p>
+                
+                <h4>Como posso contribuir para o projeto?</h4>
+                <p>O EcoScan é um projeto aberto à colaboração. Você pode contribuir de várias formas:</p>
+                <ul>
+                    <li>Sugerindo melhorias no código</li>
+                    <li>Compartilhando dados sobre pontos de coleta em sua região</li>
+                    <li>Testando o sistema e reportando resultados</li>
+                    <li>Divulgando o projeto para aumentar seu impacto</li>
+                </ul>
+            </div>
+            """
+        )
+    ]
+    
+    # Exibe a interface
+    display(tab)
+
+# @title # 🚀 Executar EcoScan
+# @markdown Clique no botão de play à esquerda para iniciar o EcoScan
+
+print("🌱 Inicializando EcoScan: Assistente de Reciclagem e Compostagem com IA...")
+
+# Verifica se todas as bibliotecas necessárias estão instaladas
+try:
+    import google.generativeai as genai
+    import folium
+    from IPython.display import display, HTML, Image as IPImage
+    from google.colab import files
+    import ipywidgets as widgets
+    print("✅ Todas as bibliotecas necessárias estão instaladas.")
+except ImportError as e:
+    print(f"❌ Erro: {e}")
+    print("Instalando bibliotecas necessárias...")
+    !pip install google-generativeai pillow matplotlib folium pandas ipywidgets
+    print("Por favor, execute esta célula novamente após a instalação.")
+    import sys
+    sys.exit()
+
+# Cria a interface interativa
+create_interactive_interface()
+```
